@@ -88,15 +88,13 @@ static void Task_HMI_Display_Update(void)
     {
         display_timer = HAL_GetTick();
 
-        // 刷新实时电压 (对应屏幕 t3, t4, t5)
-        HMI_Update_FloatText("t3", 1, "V");
-        HMI_Update_FloatText("t4", 2, "V");
-        HMI_Update_FloatText("t5", 3, "V");
+        //
+        HMI_Update_FloatText("t2", 1, "V");
+        HMI_Update_FloatText("t3", 2, "V");
+        HMI_Update_StringText("t4", "runing...");
 
-        Debug_printf("[Voltage] Vin: %7.3f V | Vs: %7.3f V | Vout: %7.3f V\r\n",
-                     1.0, 2.0, 3.0);
-        // 刷新第二问参数 (对应屏幕 t10, t11, t12)
-        HMI_Update_FloatText("t10", 4.0, "");
+        Debug_printf("[Voltage] V: %7.3f V | S: %7.3f\r\n",
+                     1.0, 1.0);
         Debug_printf("[second] Gain: %7.3f ", 4.0);
     }
 }
@@ -129,17 +127,15 @@ static void Task_HMI_Command_Process(void)
         // }
         if (hmi_rx_buffer[0] == 'A')
         {
-            HMI_Update_StringText("t9", "wait...");
+            HMI_Update_StringText("t5", "cmd:A");
         }
         else if (hmi_rx_buffer[0] == 'B')
         {
-            HMI_Update_StringText("t9", "base");
+            HMI_Update_StringText("t5", "cmd:B");
         }
-        else if (hmi_rx_buffer[0] == 'A')
+        else if (hmi_rx_buffer[0] == 'C')
         {
-            HMI_Update_FloatText("t11", 10, "R");
-            HMI_Update_FloatText("t12", 20, "R");
-            Debug_printf("[third] 2: %7.3f V | 3: %7.3f V\r\n", 30.2, 40.1);
+            HMI_Update_StringText("t5", "cmd:C");
         }
         hmi_cmd_flag = 0;
     }
