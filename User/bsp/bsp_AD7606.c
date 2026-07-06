@@ -1,16 +1,22 @@
 #include "bsp_AD7606.h"
 #include "tim.h"
+
 //=======================================
 // 变量声明
 //=======================================
-volatile int16_t AD7606_Channel_Data = 0; // 这次只用读取一个数值
-volatile uint8_t AD7606_Data_Ready = 0;   // 读取标志位
+volatile int16_t AD7606_Channel_Data = 0; // 最近一次CH1采样值
+volatile uint8_t AD7606_Data_Ready = 0;   // 单点采样标志，兼容旧代码
+
+static volatile int16_t ad7606_sample_buffer[AD7606_SAMPLE_COUNT];
+static volatile uint16_t ad7606_sample_index = 0;
+static volatile uint8_t ad7606_frame_ready = 0;
+static volatile uint8_t ad7606_frame_running = 0;
+
 //*********************************************************************************************************
 
 /**
- * @brief   微秒级/纳秒级延时 (软件阻塞)
+ * @brief   微秒级/纳秒级短延时（软件阻塞）
  * @param   nCount 延时长度
- * @note    无
  */
 static void Delay_u32(uint32_t nCount)
 {
@@ -21,79 +27,82 @@ static void Delay_u32(uint32_t nCount)
 }
 
 /**
- * @brief   转换启动函数
- * @param   无
- * @note    产生低电平触发一次同步转
+ * @brief   进入短临界区
  */
-// void AD7606_STARTCONV(void)
-// {
-//     AD7606_CONVST_A_L;
-//     AD7606_CONVST_B_L;
-//     Delay_u32(50);
-//     AD7606_CONVST_A_H;
-//     AD7606_CONVST_A_H;
-// }
+static uint32_t AD7606_EnterCritical(void)
+{
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    return primask;
+}
+
+/**
+ * @brief   退出短临界区
+ */
+static void AD7606_ExitCritical(uint32_t primask)
+{
+    if (primask == 0U)
+    {
+        __enable_irq();
+    }
+}
 
 /**
  * @brief   AD7606硬件复位函数
- * @param   无
- * @note    增加延时时间保证AD7606复位成功
  */
 void AD7606_RESET(void)
 {
     AD7606_RESET_L;
-    Delay_u32(10); // 确保一开始是低
+    Delay_u32(10);
     AD7606_RESET_H;
-    Delay_u32(100); // 维持高电平一段时间
+    Delay_u32(100);
     AD7606_RESET_L;
-    Delay_u32(100); // 等待复位恢复
+    Delay_u32(100);
 }
 
 /**
  * @brief   设置过采样率
- * @param   osv 范围[0,6]
- * @note    ~过采样倍数[1,2,4,8,16,32,64]
+ * @param   osv 范围[0,6]，对应[无过采样,2,4,8,16,32,64]
  */
 void AD7606_SETOS(uint8_t osv)
 {
     switch (osv)
     {
-    case 0: // 000
+    case 0:
         AD7606OS0_L;
         AD7606OS1_L;
         AD7606OS2_L;
         break;
-    case 1: // 001
+    case 1:
         AD7606OS0_H;
         AD7606OS1_L;
         AD7606OS2_L;
         break;
-    case 2: // 010
+    case 2:
         AD7606OS0_L;
         AD7606OS1_H;
         AD7606OS2_L;
         break;
-    case 3: // 011
+    case 3:
         AD7606OS0_H;
         AD7606OS1_H;
         AD7606OS2_L;
         break;
-    case 4: // 100
+    case 4:
         AD7606OS0_L;
         AD7606OS1_L;
         AD7606OS2_H;
         break;
-    case 5: // 101
+    case 5:
         AD7606OS0_H;
         AD7606OS1_L;
         AD7606OS2_H;
         break;
-    case 6: // 110
+    case 6:
         AD7606OS0_L;
         AD7606OS1_H;
         AD7606OS2_H;
         break;
-
     default:
         AD7606OS0_L;
         AD7606OS1_L;
@@ -103,99 +112,156 @@ void AD7606_SETOS(uint8_t osv)
 }
 
 /**
- * @brief   AD7606 初始化函数
- * @param   无
- * @note    拉高片选、SPI时钟、同步转换。硬件复位
+ * @brief   AD7606初始化函数
+ * @note    TIM1 PWM负责周期触发CONVST，BUSY中断负责读取DOUTA。
  */
 void AD7606_Init(void)
 {
-    // 引脚默认状态
     AD7606_CS_H;
     AD7606_SCLK_H;
-    // AD7606_CONVST_A_H;
-    // AD7606_CONVST_B_H;
 
-    // 初始化复位，无过采样
+    // THD测量需要稳定采样时钟，默认关闭过采样，避免降低有效采样率。
     AD7606_SETOS(0);
     AD7606_RESET();
+    AD7606_Frame_Start();
 
-    // 启动CONV_A和CONV_B PWM触发
+    // 启动CONV_A和CONV_B PWM触发。
     HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
     HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_4);
 }
 
 /**
  * @brief   AD7606单通道数据读取函数
- * @param   无
- * @note    读取单个通道的16位数据
+ * @note    当前只读取CH1，对应被测输出uo。
  */
 static int16_t AD7606_OneChanel_ReadBytes(void)
 {
     uint16_t usData = 0;
+
     for (uint8_t i = 0; i < 16; i++)
     {
         AD7606_SCLK_L;
-        Delay_u32(5); // 等待稳定
-        usData = usData << 1;
+        Delay_u32(5);
+        usData <<= 1;
         if (AD7606_DOUTA == GPIO_PIN_SET)
         {
-            usData |= 0x0001;
+            usData |= 0x0001U;
         }
         AD7606_SCLK_H;
         Delay_u32(5);
     }
+
     return (int16_t)usData;
 }
 
+/**
+ * @brief   开始采集一帧THD分析数据
+ */
+void AD7606_Frame_Start(void)
+{
+    uint32_t primask = AD7606_EnterCritical();
+
+    ad7606_sample_index = 0;
+    ad7606_frame_ready = 0;
+    ad7606_frame_running = 1;
+    AD7606_Data_Ready = 0;
+
+    AD7606_ExitCritical(primask);
+}
+
+/**
+ * @brief   查询一帧采样是否完成
+ */
+uint8_t AD7606_Frame_IsReady(void)
+{
+    return ad7606_frame_ready;
+}
+
+/**
+ * @brief   复制完整采样帧到应用层缓冲区
+ * @param   dst 目标缓冲区
+ * @param   max_len 目标缓冲区长度
+ * @return  实际复制点数
+ */
+uint16_t AD7606_Frame_Copy(int16_t *dst, uint16_t max_len)
+{
+    uint16_t copy_len;
+    uint32_t primask;
+
+    if ((dst == NULL) || (ad7606_frame_ready == 0U))
+    {
+        return 0;
+    }
+
+    copy_len = AD7606_SAMPLE_COUNT;
+    if (copy_len > max_len)
+    {
+        copy_len = max_len;
+    }
+
+    // 帧完成后中断不再写入缓冲区；这里仍短暂关中断，避免状态被重新启动采样打断。
+    primask = AD7606_EnterCritical();
+    for (uint16_t i = 0; i < copy_len; i++)
+    {
+        dst[i] = ad7606_sample_buffer[i];
+    }
+    AD7606_ExitCritical(primask);
+
+    return copy_len;
+}
+
+/**
+ * @brief   获取当前帧已写入点数，便于调试采样进度
+ */
+uint16_t AD7606_Frame_GetWriteIndex(void)
+{
+    uint16_t index;
+    uint32_t primask = AD7606_EnterCritical();
+
+    index = ad7606_sample_index;
+    AD7606_ExitCritical(primask);
+
+    return index;
+}
+
+/**
+ * @brief   获取当前软件认为的采样率
+ */
+uint32_t AD7606_GetSampleRateHz(void)
+{
+    return AD7606_SAMPLE_RATE_HZ;
+}
+
 //*********************************************************************************************************
-// GPIO EXTI 中断服务函数
+// GPIO EXTI 中断回调
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
+    int16_t sample;
+
     if (GPIO_Pin == GPIO_PIN_3)
     {
+        if ((ad7606_frame_running == 0U) && (ad7606_frame_ready != 0U))
+        {
+            return;
+        }
         AD7606_CS_L;
+        sample = AD7606_OneChanel_ReadBytes();
+        AD7606_CS_H;
 
-        AD7606_Channel_Data = AD7606_OneChanel_ReadBytes();
-        // AD7606_Channel_Data[1] = AD7606_OneChanel_ReadBytes();
-        // AD7606_Channel_Data[2] = AD7606_OneChanel_ReadBytes();
-        AD7606_CS_H; // 传输完毕拉高CS片选
-        // 4. 标记数据准备完成
+        AD7606_Channel_Data = sample;
         AD7606_Data_Ready = 1;
+
+        if ((ad7606_frame_running != 0U) && (ad7606_frame_ready == 0U))
+        {
+            ad7606_sample_buffer[ad7606_sample_index] = sample;
+            ad7606_sample_index++;
+
+            if (ad7606_sample_index >= AD7606_SAMPLE_COUNT)
+            {
+                ad7606_frame_running = 0;
+                ad7606_frame_ready = 1;
+            }
+        }
     }
 }
 //*********************************************************************************************************
-/**
- * @brief   多通道轮询函数
- * @param   无
- * @note    只读取前 3 个通道 (CH1, CH2, CH3)
- */
-// void AD7606_Sample_Task(void)
-// {
-//     // 如果数据还没被处理完，防止覆盖
-//     if (AD7606_Data_Ready == 1)
-//         return;
-
-//     // 1. 发送触发脉冲
-//     AD7606_STARTCONV();
-
-//     // 2. 等待转换完成 (BUSY从高变低)
-//     uint32_t timeout = 10000;
-//     while (AD7606_BUSY == GPIO_PIN_SET && timeout--)
-//         ;
-//     // 超时防止死机
-
-//     if (timeout > 0)
-//     {
-//         // 3. 开始串行读取
-//         AD7606_CS_L;
-
-//         // 顺序读取 CH1, CH2, CH3
-//         for (uint8_t i = 0; i < 3; i++)
-//         {
-//             AD7606_Channel_Data[i] = AD7606_OneChanel_ReadBytes();
-//         }
-//         AD7606_CS_H; // 传输完毕拉高CS片选
-//         // 4. 标记数据准备完成
-//         AD7606_Data_Ready = 1;
-//     }
-// }

@@ -1,52 +1,69 @@
 #include "header.h"
 #include "app_proccess.h"
+#include "bsp_AD7606.h"
+
 //*********************************************************************************************************
 extern UART_HandleTypeDef huart1; // HMI 控制串口
-extern UART_HandleTypeDef huart3; // printf 调试串口
-//*********************************************************************************************************
-static uint8_t hmi_rx_buffer[50]; // HMI 接收缓冲区
-static char debug_buffer[128];    // 电脑串口调试 接收缓冲区
-static uint8_t hmi_cmd_flag = 0;  // 新指令标志位 (0 = false)
-static uint16_t hmi_cmd_size = 0; // 新指令长度
+extern UART_HandleTypeDef huart3; // PC 调试串口
 //*********************************************************************************************************
 
+typedef enum
+{
+    APP_MEAS_IDLE = 0,
+    APP_MEAS_REFRESH_UO,
+    APP_MEAS_WAIT_THD_FRAME,
+    APP_MEAS_THD_FRAME_READY
+} App_Measure_State_t;
+
+static uint8_t hmi_rx_buffer[1];          // HMI 单字节命令接收缓冲区
+static char debug_buffer[160];            // PC串口调试发送缓冲区
+static volatile uint8_t hmi_cmd_flag = 0; // 新命令标志位
+static volatile uint8_t hmi_cmd_data = 0; // 最新命令字节
+
+static int16_t app_sample_buffer[AD7606_SAMPLE_COUNT];
+static uint8_t app_frame_valid = 0;
+static uint8_t app_thd_request = 0;
+static uint32_t app_frame_counter = 0;
+
+static float app_uo_vpp = 0.0f;
+static int16_t app_uo_min = 0;
+static int16_t app_uo_max = 0;
+static App_Measure_State_t app_measure_state = APP_MEAS_IDLE;
+
 //=========================================================================================================
-// 1、功能函数
+// 1. 基础功能函数
 //=========================================================================================================
 /**
- * @name HMI_Process_Init()
- * @brief 启动HMI的处理逻辑
- * @note 启动第一次DMA接收
- * *@param 无
+ * @name HMI_Process_Init
+ * @brief 启动应用层接收与测量任务框架
  */
 void HMI_Process_Init(void)
 {
-    // 启动HMI串口(USART1)的空闲中断DMA接收
-    // HAL_UARTEx_ReceiveToIdle_DMA(&huart1, hmi_rx_buffer, sizeof(hmi_rx_buffer));
     HAL_UART_Receive_IT(&huart1, hmi_rx_buffer, 1);
+    AD7606_Frame_Start();
+    app_measure_state = APP_MEAS_REFRESH_UO;
+    Debug_printf("[APP] UART1 RX started, measure tasks ready. Fs=%luHz, N=%u\r\n",
+                 (unsigned long)AD7606_GetSampleRateHz(), (unsigned int)AD7606_SAMPLE_COUNT);
 }
 
 /**
- * @name    HMI_Send_Cmd()
- * @brief   向 HMI 串口屏 (USART1) 发送原始指令 (带 0xFF 结尾)
- * @note    可以用于比如切换页面（page pagenam）
- * @param   *cmd_string：指令（类型为char*）
+ * @name    HMI_Send_Cmd
+ * @brief   向HMI串口屏发送原始指令，当前任务框架暂不调用显示代码
  */
 void HMI_Send_Cmd(const char *cmd_string)
 {
-    char cmd_buffer[100]; // 缓冲区
+    char cmd_buffer[100];
     int len = snprintf(cmd_buffer, sizeof(cmd_buffer), "%s\xff\xff\xff", cmd_string);
 
-    // 使用阻塞式发送
-    HAL_UART_Transmit(&huart1, (uint8_t *)cmd_buffer, len, HAL_MAX_DELAY);
+    if (len > 0)
+    {
+        HAL_UART_Transmit(&huart1, (uint8_t *)cmd_buffer, len, HAL_MAX_DELAY);
+    }
 }
 
 /**
- * @name    Debug_prinf()
- * @brief   自定义串口发送文本
- * @note    用于向电脑发送串口信息，用于调试
- * @param   *text:文本
- * @param   ...:可变变量
+ * @name    Debug_printf
+ * @brief   PC串口调试打印
  */
 void Debug_printf(const char *text, ...)
 {
@@ -54,108 +71,209 @@ void Debug_printf(const char *text, ...)
     va_start(args, text);
     int len = vsnprintf(debug_buffer, sizeof(debug_buffer), text, args);
     va_end(args);
+
     if (len > 0)
     {
+        if (len >= (int)sizeof(debug_buffer))
+        {
+            len = sizeof(debug_buffer) - 1;
+        }
         HAL_UART_Transmit(&huart3, (uint8_t *)debug_buffer, len, 100);
     }
 }
 
-// 封装：向串口屏特定文本控件发送浮点数
-static void HMI_Update_FloatText(const char *obj_name, float value, const char *unit)
-{
-    char buf[64];
-    // 陶晶驰/Nextion 格式: t0.txt="1.23V"
-    snprintf(buf, sizeof(buf), "%s.txt=\"%.5f %s\"", obj_name, value, unit);
-    HMI_Send_Cmd(buf);
-}
-
-// 封装：向串口屏特定文本控件发送字符串
-static void HMI_Update_StringText(const char *obj_name, const char *str)
-{
-    char buf[64];
-    snprintf(buf, sizeof(buf), "%s.txt=\"%s\"", obj_name, str);
-    HMI_Send_Cmd(buf);
-}
 //=========================================================================================================
-// 2.任务函数（应用）
+// 2. 测量辅助函数（这里只做幅度刷新，不放THD算法）
 //=========================================================================================================
 /**
- * @name   Task_HMI_Display_Update
- * @brief  任务三：以固定频率刷新 HMI 屏幕显示 (避免频繁通信卡死串口)
+ * @brief   计算一帧采样的峰峰值
  */
-static void Task_HMI_Display_Update(void)
+static float App_Calc_Uo_Vpp(const int16_t *data, uint16_t len, int16_t *raw_min, int16_t *raw_max)
 {
-    static uint32_t display_timer = 0;
+    int16_t min_value = data[0];
+    int16_t max_value = data[0];
 
-    // 每 200 毫秒刷新一次屏幕 (人眼看着很流畅，且节约资源)
-    if (HAL_GetTick() - display_timer > 200)
+    for (uint16_t i = 1; i < len; i++)
     {
-        display_timer = HAL_GetTick();
-
-        //
-        HMI_Update_FloatText("t2", 1, "V");
-        HMI_Update_FloatText("t3", 2, "V");
-        HMI_Update_StringText("t4", "runing...");
-
-        Debug_printf("[Voltage] V: %7.3f V | S: %7.3f\r\n",
-                     1.0, 1.0);
-        Debug_printf("[second] time: %d\r\n", display_timer);
+        if (data[i] < min_value)
+        {
+            min_value = data[i];
+        }
+        if (data[i] > max_value)
+        {
+            max_value = data[i];
+        }
     }
-}
 
-static void Task_HMI_Command_Process(void)
-{
-    Debug_printf("flag = %d\r\n", hmi_cmd_flag);
-    if (hmi_cmd_flag == 1)
-    {
-        HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13); // 指示灯闪烁
-        Debug_printf("=> RX Trig! Size:%d, Data[0]:%c (Hex:%02X)\r\n",
-                     hmi_cmd_size, hmi_rx_buffer[0], hmi_rx_buffer[0]);
+    *raw_min = min_value;
+    *raw_max = max_value;
 
-        // if (hmi_rx_buffer[0] == 'A') // 诉求：按下测量按钮，刷新第二问 HMI
-        // {
-        //     Debug_printf("=> Button A Pressed: Update Display\r\n");
-
-        //     // 后台算好的平滑电压上屏
-        //     HMI_Update_FloatText("t3", global_v1, "V");
-        //     HMI_Update_FloatText("t4", global_v2, "V");
-        //     HMI_Update_FloatText("t5", global_v3, "V");
-
-        //     // 第二问参数上屏
-        //     HMI_Update_FloatText("t10", global_gain, "");
-        //     HMI_Update_FloatText("t11", global_rin, "R");
-        //     HMI_Update_FloatText("t12", global_rout, "R");
-
-        //     // 电脑串口打印，方便排查
-        //     Debug_printf("[Meas] Gain:%.2f | Rin:%.1f | Rout:%.1f\r\n", global_gain, global_rin, global_rout);
-        // }
-        if (hmi_rx_buffer[0] == 'A')
-        {
-            HMI_Update_StringText("t5", "cmd:A");
-        }
-        else if (hmi_rx_buffer[0] == 'B')
-        {
-            HMI_Update_StringText("t5", "cmd:B");
-        }
-        else if (hmi_rx_buffer[0] == 'C')
-        {
-            HMI_Update_StringText("t5", "cmd:C");
-        }
-        hmi_cmd_flag = 0;
-    }
+    return ((float)(max_value - min_value) * AD7606_INPUT_RANGE_V) / 32768.0f;
 }
 
 //=========================================================================================================
-// 3. 主轮询整合与中断回调
+// 3. 应用任务函数
 //=========================================================================================================
+/**
+ * @brief   按键响应任务：A键请求THD计算帧，S键重新开始采样
+ */
+static void Task_Button_Response(void)
+{
+    uint8_t cmd;
 
+    if (hmi_cmd_flag == 0U)
+    {
+        return;
+    }
+
+    __disable_irq();
+    cmd = hmi_cmd_data;
+    hmi_cmd_flag = 0;
+    __enable_irq();
+
+    HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
+    Debug_printf("[KEY] RX cmd='%c' hex=0x%02X\r\n", cmd, cmd);
+
+    if (cmd == 'A')
+    {
+        app_thd_request = 1;
+        app_frame_valid = 0;
+        app_measure_state = APP_MEAS_WAIT_THD_FRAME;
+        AD7606_Frame_Start();
+        Debug_printf("[KEY] THD button accepted, capturing one full frame for later algorithm.\r\n");
+    }
+    else if (cmd == 'S')
+    {
+        app_frame_valid = 0;
+        app_thd_request = 0;
+        app_measure_state = APP_MEAS_REFRESH_UO;
+        AD7606_Frame_Start();
+        Debug_printf("[KEY] Sample frame restarted manually.\r\n");
+    }
+    else
+    {
+        Debug_printf("[KEY] Unknown cmd, use 'A'=capture THD frame, 'S'=restart sample.\r\n");
+    }
+}
+
+/**
+ * @brief   幅度刷新任务：持续用完整采样帧刷新uo峰峰值
+ */
+static void Task_Uo_Amplitude_Refresh(void)
+{
+    uint16_t copy_len;
+
+    if (AD7606_Frame_IsReady() == 0U)
+    {
+        return;
+    }
+
+    copy_len = AD7606_Frame_Copy(app_sample_buffer, AD7606_SAMPLE_COUNT);
+    if (copy_len == 0U)
+    {
+        return;
+    }
+
+    app_uo_vpp = App_Calc_Uo_Vpp(app_sample_buffer, copy_len, &app_uo_min, &app_uo_max);
+    app_frame_valid = 1;
+    app_frame_counter++;
+
+    Debug_printf("[UO] frame=%lu len=%u raw_min=%d raw_max=%d Vpp=%.4fV\r\n",
+                 (unsigned long)app_frame_counter,
+                 (unsigned int)copy_len,
+                 app_uo_min,
+                 app_uo_max,
+                 app_uo_vpp);
+
+    if (app_thd_request == 0U)
+    {
+        app_frame_valid = 0;
+        app_measure_state = APP_MEAS_REFRESH_UO;
+        AD7606_Frame_Start();
+    }
+    else
+    {
+        app_measure_state = APP_MEAS_THD_FRAME_READY;
+    }
+}
+
+/**
+ * @brief   THD请求任务：只搭建触发框架，算法后续放到User/alog实现
+ */
+static void Task_THD_Request_Process(void)
+{
+    if ((app_thd_request == 0U) || (app_frame_valid == 0U))
+    {
+        return;
+    }
+
+    Debug_printf("[THD] frame ready for algorithm: len=%u Fs=%luHz. Algorithm not added yet.\r\n",
+                 (unsigned int)AD7606_SAMPLE_COUNT, (unsigned long)AD7606_GetSampleRateHz());
+
+    app_thd_request = 0;
+    app_frame_valid = 0;
+    app_measure_state = APP_MEAS_REFRESH_UO;
+    AD7606_Frame_Start();
+}
+
+/**
+ * @brief   数据状态任务：仅通过PC串口输出，不写HMI显示代码
+ */
+static void Task_Data_Status_Debug(void)
+{
+    static uint32_t debug_timer = 0;
+    const char *state_text = "IDLE";
+
+    if (HAL_GetTick() - debug_timer < 500U)
+    {
+        return;
+    }
+    debug_timer = HAL_GetTick();
+
+    if (app_measure_state == APP_MEAS_REFRESH_UO)
+    {
+        state_text = "REFRESH_UO";
+    }
+    else if (app_measure_state == APP_MEAS_WAIT_THD_FRAME)
+    {
+        state_text = "WAIT_THD";
+    }
+    else if (app_measure_state == APP_MEAS_THD_FRAME_READY)
+    {
+        state_text = "THD_FRAME_READY";
+    }
+
+    Debug_printf("[STAT] uo_vpp=%.4fV state=%s sample=%u/%u\r\n",
+                 app_uo_vpp,
+                 state_text,
+                 (unsigned int)AD7606_Frame_GetWriteIndex(),
+                 (unsigned int)AD7606_SAMPLE_COUNT);
+}
+
+//=========================================================================================================
+// 4. 主轮询整合与中断回调
+//=========================================================================================================
 /**
  * @name   App_Main_Process_Poll
- * @brief  放置于 main.c 的 while(1) 中，统筹调度所有任务
+ * @brief  放在main.c的while(1)中，统筹调度所有应用任务
  */
 void App_Main_Process_Poll(void)
 {
-    // HMI_Update_FloatText("t3",0.0f,"V");
-    Task_HMI_Display_Update(); // 周期性刷新屏幕 UI
-    // Task_HMI_Command_Process(); // 随时响应用户触摸指令
+    Task_Button_Response();
+    Task_Uo_Amplitude_Refresh();
+    Task_THD_Request_Process();
+    Task_Data_Status_Debug();
+}
+
+/**
+ * @brief USART接收完成回调，只保存命令并重启接收
+ */
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+    if (huart->Instance == USART1)
+    {
+        hmi_cmd_data = hmi_rx_buffer[0];
+        hmi_cmd_flag = 1;
+        HAL_UART_Receive_IT(huart, hmi_rx_buffer, 1);
+    }
 }
