@@ -26,6 +26,7 @@
 "ti_cqupt_t1_v1\system_stm32f4xx.o"
 "ti_cqupt_t1_v1\bsp_ad7606.o"
 "ti_cqupt_t1_v1\app_proccess.o"
+"ti_cqupt_t1_v1\alog_thd.o"
 "../Middlewares/ST/ARM/DSP/Lib/arm_cortexM4lf_math.lib"
 --strict --scatter "TI_CQUPT_T1_v1\TI_CQUPT_T1_v1.sct"
 --summary_stderr --info summarysizes --map --load_addr_map_info --xref --callgraph --symbols

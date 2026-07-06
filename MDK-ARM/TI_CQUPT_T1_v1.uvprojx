@@ -720,9 +720,18 @@
         </Group>
         <Group>
           <GroupName>User/alog</GroupName>
-        </Group>
-        <Group>
-          <GroupName>::CMSIS</GroupName>
+          <Files>
+            <File>
+              <FileName>alog_thd.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\User\alog\alog_thd.c</FilePath>
+            </File>
+            <File>
+              <FileName>alog_thd.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\User\alog\alog_thd.h</FilePath>
+            </File>
+          </Files>
         </Group>
         <Group>
           <GroupName>Middlewares/Library/DSP Library/DSP Library</GroupName>
@@ -821,6 +830,9 @@
               </FileOption>
             </File>
           </Files>
+        </Group>
+        <Group>
+          <GroupName>::CMSIS</GroupName>
         </Group>
       </Groups>
     </Target>
