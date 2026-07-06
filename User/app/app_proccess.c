@@ -30,6 +30,17 @@ static int16_t app_uo_min = 0;
 static int16_t app_uo_max = 0;
 static App_Measure_State_t app_measure_state = APP_MEAS_IDLE;
 
+//***************************
+// 后续THD算法接入预留（当前全部保持注释，不参与编译和运行）
+//***************************
+// #include "alog_thd.h"
+// static Alog_THD_Config_t app_thd_config;
+// static Alog_THD_Result_t app_thd_result;
+// static Alog_THD_Status_t app_thd_status;
+// app_thd_config 用于保存20kHz采样率、1kHz基波、AD7606量程、最小基波阈值。
+// app_thd_result 用于保存Vpp、直流均值、1~5次谐波幅值和THD百分比。
+// app_thd_status 用于判断算法是否计算成功、是否无信号或参数错误。
+
 //=========================================================================================================
 // 1. 基础功能函数
 //=========================================================================================================
@@ -44,6 +55,16 @@ void HMI_Process_Init(void)
     app_measure_state = APP_MEAS_REFRESH_UO;
     Debug_printf("[APP] UART1 RX started, measure tasks ready. Fs=%luHz, N=%u\r\n",
                  (unsigned long)AD7606_GetSampleRateHz(), (unsigned int)AD7606_SAMPLE_COUNT);
+
+    //***************************
+    // 后续算法初始化位置（当前不实际运行）
+    //***************************
+    // 这里适合调用 Alog_THD_Init(&app_thd_config);
+    // 然后根据硬件实际量程覆盖参数：
+    // app_thd_config.sample_rate_hz = AD7606_GetSampleRateHz();
+    // app_thd_config.target_freq_hz = 1000.0f;
+    // app_thd_config.adc_range_v = AD7606_INPUT_RANGE_V;
+    // app_thd_config.min_fundamental_v = 0.02f;
 }
 
 /**
@@ -174,6 +195,14 @@ static void Task_Uo_Amplitude_Refresh(void)
         return;
     }
 
+    //***************************
+    // 采样帧用途说明（当前实际只计算uo峰峰值）
+    //***************************
+    // app_sample_buffer 保存从AD7606复制出的完整一帧原始采样。
+    // 当没有THD请求时，本帧只用于连续刷新uo幅度值。
+    // 当按键触发THD请求时，本帧将作为 Alog_THD_Calc() 的输入数据。
+    // 注意：算法只能在主循环任务里执行，不能放到AD7606的EXTI中断回调里。
+
     app_uo_vpp = App_Calc_Uo_Vpp(app_sample_buffer, copy_len, &app_uo_min, &app_uo_max);
     app_frame_valid = 1;
     app_frame_counter++;
@@ -209,6 +238,26 @@ static void Task_THD_Request_Process(void)
 
     Debug_printf("[THD] frame ready for algorithm: len=%u Fs=%luHz. Algorithm not added yet.\r\n",
                  (unsigned int)AD7606_SAMPLE_COUNT, (unsigned long)AD7606_GetSampleRateHz());
+
+    //***************************
+    // 后续THD算法调用位置（当前不实际运行）
+    //***************************
+    // 这里将使用按键请求后采集到的完整一帧 app_sample_buffer。
+    // 推荐调用顺序：
+    // 1. 确认 copy_len 或 AD7606_SAMPLE_COUNT 为1000点，采样率为20kHz。
+    // 2. 调用 Alog_THD_Calc(app_sample_buffer,
+    //                       AD7606_SAMPLE_COUNT,
+    //                       &app_thd_config,
+    //                       &app_thd_result);
+    // 3. 如果返回 ALOG_THD_OK：
+    //      app_thd_result.thd_percent 即为需要显示的THD近似值；
+    //      app_thd_result.harmonic_v[0~4] 分别为1~5次谐波峰值；
+    //      app_thd_result.vpp 可替代当前简单峰峰值结果。
+    // 4. 如果返回 ALOG_THD_ERR_NO_SIGNAL：
+    //      通过PC串口提示无有效1kHz基波，HMI后续显示无信号或等待输入。
+    // 5. 如果返回 ALOG_THD_ERR_PARAM / ALOG_THD_ERR_NULL：
+    //      通过PC串口提示参数错误，检查采样率、点数、量程和指针。
+    // 6. 算法完成后再安排HMI显示任务刷新，避免在算法函数内部直接访问HMI。
 
     app_thd_request = 0;
     app_frame_valid = 0;
@@ -248,6 +297,13 @@ static void Task_Data_Status_Debug(void)
                  state_text,
                  (unsigned int)AD7606_Frame_GetWriteIndex(),
                  (unsigned int)AD7606_SAMPLE_COUNT);
+
+    //***************************
+    // 后续数据显示任务预留（当前不写HMI显示代码）
+    //***************************
+    // uo实时幅度：显示 app_uo_vpp。
+    // THD按键计算结果：显示 app_thd_result.thd_percent。
+    // 调试时可额外输出 app_thd_result.harmonic_v[0~4]，用于判断谐波提取是否正常。
 }
 
 //=========================================================================================================
