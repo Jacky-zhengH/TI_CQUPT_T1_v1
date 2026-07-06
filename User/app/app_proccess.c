@@ -10,12 +10,14 @@ static uint8_t hmi_cmd_flag = 0;  // 新指令标志位 (0 = false)
 static uint16_t hmi_cmd_size = 0; // 新指令长度
 //*********************************************************************************************************
 
-//*********************************************************************************************************
+//=========================================================================================================
+// 1、功能函数
+//=========================================================================================================
 /**
- * @name    HMI_Process_Init()
- * @brief   启动HMI的处理逻辑
- * @note    启动第一次DMA接收
- * @param   无
+ * @name HMI_Process_Init()
+ * @brief 启动HMI的处理逻辑
+ * @note 启动第一次DMA接收
+ * *@param 无
  */
 void HMI_Process_Init(void)
 {
@@ -74,7 +76,9 @@ static void HMI_Update_StringText(const char *obj_name, const char *str)
     snprintf(buf, sizeof(buf), "%s.txt=\"%s\"", obj_name, str);
     HMI_Send_Cmd(buf);
 }
-
+//=========================================================================================================
+// 2.任务函数（应用）
+//=========================================================================================================
 /**
  * @name   Task_HMI_Display_Update
  * @brief  任务三：以固定频率刷新 HMI 屏幕显示 (避免频繁通信卡死串口)
@@ -95,7 +99,7 @@ static void Task_HMI_Display_Update(void)
 
         Debug_printf("[Voltage] V: %7.3f V | S: %7.3f\r\n",
                      1.0, 1.0);
-        Debug_printf("[second] Gain: %7.3f ", 4.0);
+        Debug_printf("[second] time: %d\r\n", display_timer);
     }
 }
 
@@ -139,4 +143,19 @@ static void Task_HMI_Command_Process(void)
         }
         hmi_cmd_flag = 0;
     }
+}
+
+//=========================================================================================================
+// 3. 主轮询整合与中断回调
+//=========================================================================================================
+
+/**
+ * @name   App_Main_Process_Poll
+ * @brief  放置于 main.c 的 while(1) 中，统筹调度所有任务
+ */
+void App_Main_Process_Poll(void)
+{
+    // HMI_Update_FloatText("t3",0.0f,"V");
+    Task_HMI_Display_Update(); // 周期性刷新屏幕 UI
+    // Task_HMI_Command_Process(); // 随时响应用户触摸指令
 }

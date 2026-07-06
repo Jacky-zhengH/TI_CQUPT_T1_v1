@@ -7,5 +7,5 @@
 
 void HMI_Process_Init(void);
 void HMI_Send_Cmd(const char *cmd_string);
-
+void App_Main_Process_Poll(void);
 #endif

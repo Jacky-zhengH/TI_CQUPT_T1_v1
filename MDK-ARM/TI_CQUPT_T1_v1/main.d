@@ -28,7 +28,21 @@ ti_cqupt_t1_v1\main.o: ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_flash_e
 ti_cqupt_t1_v1\main.o: ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_flash_ramfunc.h
 ti_cqupt_t1_v1\main.o: ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_pwr.h
 ti_cqupt_t1_v1\main.o: ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_pwr_ex.h
+ti_cqupt_t1_v1\main.o: ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_tim.h
+ti_cqupt_t1_v1\main.o: ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_tim_ex.h
 ti_cqupt_t1_v1\main.o: ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_uart.h
 ti_cqupt_t1_v1\main.o: ../Core/Inc/dma.h
+ti_cqupt_t1_v1\main.o: ../Core/Inc/tim.h
 ti_cqupt_t1_v1\main.o: ../Core/Inc/usart.h
 ti_cqupt_t1_v1\main.o: ../Core/Inc/gpio.h
+ti_cqupt_t1_v1\main.o: ../User/bsp/bsp_AD7606.h
+ti_cqupt_t1_v1\main.o: ../User/header.h
+ti_cqupt_t1_v1\main.o: D:\Program Files\Keil_v5\ARM\ARMCC\Bin\..\include\stdio.h
+ti_cqupt_t1_v1\main.o: D:\Program Files\Keil_v5\ARM\ARMCC\Bin\..\include\stdlib.h
+ti_cqupt_t1_v1\main.o: D:\Program Files\Keil_v5\ARM\ARMCC\Bin\..\include\string.h
+ti_cqupt_t1_v1\main.o: D:\Program Files\Keil_v5\ARM\ARMCC\Bin\..\include\stdarg.h
+ti_cqupt_t1_v1\main.o: ../Middlewares/ST/ARM/DSP/Inc/arm_math.h
+ti_cqupt_t1_v1\main.o: D:\Program Files\Keil_v5\ARM\ARMCC\Bin\..\include\math.h
+ti_cqupt_t1_v1\main.o: D:\Program Files\Keil_v5\ARM\ARMCC\Bin\..\include\float.h
+ti_cqupt_t1_v1\main.o: D:\Program Files\Keil_v5\ARM\ARMCC\Bin\..\include\limits.h
+ti_cqupt_t1_v1\main.o: ../User/app/app_proccess.h

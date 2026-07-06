@@ -3,8 +3,8 @@
 //=======================================
 // 变量声明
 //=======================================
-volatile int16_t AD7606_Channel_Data[3] = {0}; // 1~3通道 数据缓存区
-volatile uint8_t AD7606_Data_Ready = 0;        // 读取标志位
+volatile int16_t AD7606_Channel_Data = 0; // 这次只用读取一个数值
+volatile uint8_t AD7606_Data_Ready = 0;   // 读取标志位
 //*********************************************************************************************************
 
 /**
@@ -155,9 +155,9 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
     {
         AD7606_CS_L;
 
-        AD7606_Channel_Data[0] = AD7606_OneChanel_ReadBytes();
-        AD7606_Channel_Data[1] = AD7606_OneChanel_ReadBytes();
-        AD7606_Channel_Data[2] = AD7606_OneChanel_ReadBytes();
+        AD7606_Channel_Data = AD7606_OneChanel_ReadBytes();
+        // AD7606_Channel_Data[1] = AD7606_OneChanel_ReadBytes();
+        // AD7606_Channel_Data[2] = AD7606_OneChanel_ReadBytes();
         AD7606_CS_H; // 传输完毕拉高CS片选
         // 4. 标记数据准备完成
         AD7606_Data_Ready = 1;
