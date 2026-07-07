@@ -41,3 +41,4 @@ ti_cqupt_t1_v1\app_proccess.o: ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal
 ti_cqupt_t1_v1\app_proccess.o: ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_uart.h
 ti_cqupt_t1_v1\app_proccess.o: ..\User\app\app_proccess.h
 ti_cqupt_t1_v1\app_proccess.o: ../User/bsp/bsp_AD7606.h
+ti_cqupt_t1_v1\app_proccess.o: ../User/alog/alog_thd.h

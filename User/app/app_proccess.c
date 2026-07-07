@@ -89,10 +89,6 @@ void Debug_printf(const char *text, ...)
 
     if (len > 0)
     {
-        if (len >= (int)sizeof(debug_buffer))
-        {
-            len = sizeof(debug_buffer) - 1;
-        }
         HAL_UART_Transmit(&huart3, (uint8_t *)debug_buffer, len, 100);
     }
 }
